@@ -45,6 +45,132 @@
 extern u64 time_spent_working;
 #endif
 
+enum SymSanProtoState {
+  START, /* start to feed */
+  DELETE, /* delete useless testcase and feed the next testcase */
+  TESTING, /* fuzzer deliver new testcase */
+  WAITING, /* temporily wait to generate new testcase */
+  // DONE /* test is done and may generate some new testcase */
+};
+struct SymSanProto {
+  enum SymSanProtoState cmd;
+  char data[255];
+};
+
+
+static int use_symsan = 0;
+static int shm_symsan_id;
+static u8 *shm_symsan_ptr;
+static const key_t SHM_KEY = 0x100000; // We should use a fix key to interact with SymSanitizer
+static const  int SHM_SIZE = 256;
+static afl_state_t * kafl;
+static struct queue_entry * queue_cur;
+static struct SymSanProto *proto;
+static u32 queue_buf_idx = -1;
+static bool is_waiting = false;
+u64 record_queued_items = 0;
+
+
+static void detroy_sanitizer_shm() {
+  struct shmid_ds shmid_ds;
+  if (shmdt(shm_symsan_ptr) == -1) PFATAL("detroy_sanitizer_shm shmdt() failed");
+  
+  if (shmctl(shm_symsan_id, IPC_STAT, &shmid_ds) == -1)
+    PFATAL("detroy_sanitizer_shm shmctl() IPC_STAT");
+
+  // Remove the shared memory segment if there are no other processes attached
+  if (shmid_ds.shm_nattch == 0) {
+    if (shmctl(shm_symsan_id, IPC_RMID, 0) == -1) {
+      PFATAL("detroy_sanitizer_shm shmctl() IPC_RMID failed");
+    }
+    SAYF("detroy_sanitizer_shm() Shared memory segment removed.\n");
+  }
+}
+
+static void setup_sanitizer_shm() {
+  shm_symsan_id = shmget(SHM_KEY, SHM_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+  if (shm_symsan_id < 0) PFATAL("setup_sanitizer_shm shmget() failed");
+  shm_symsan_ptr = shmat(shm_symsan_id, NULL, 0);
+  if (shm_symsan_ptr == (void *)-1) PFATAL("setup_sanitizer_shm shmat() failed");
+  memset(shm_symsan_ptr, 0, SHM_SIZE);
+  proto = (struct SymSanProto *) shm_symsan_ptr;
+}
+
+static inline void notify_test() {
+  strcpy(proto->data, queue_cur->fname);
+  proto->cmd = TESTING;
+}
+
+static inline void notify_wait() {
+  proto->cmd = WAITING;
+}
+
+/* strategy: choose the first of the queue */
+// static void select_queue_testcase() {
+
+//   do {
+//     queue_buf_idx++;
+//     if (queue_buf_idx >= kafl->queued_items) FATAL("queue item run out");
+//     queue_cur = kafl->queue_buf[queue_buf_idx];
+//   } while(queue_cur->disabled || !queue_cur);
+//   struct SymSanProto *proto = (struct SymSanProto *) shm_symsan_ptr;
+//   strcpy(proto->data, queue_cur->fname);
+//   proto->cmd = TESTING;
+// }
+
+/* strategy: choose unfavored and have no new cov */
+static void select_queue_testcase() {
+  bool run_out = false;
+  do {
+    queue_buf_idx++;
+    if (queue_buf_idx >= kafl->queued_items) {
+      run_out = true;
+      break;
+    }
+    queue_cur = kafl->queue_buf[queue_buf_idx]; 
+  } while (queue_cur->favored || queue_cur->has_new_cov || !queue_cur || queue_cur->disabled);
+  if (run_out) {
+    record_queued_items = kafl->queued_items;
+    is_waiting = true;
+    notify_wait();
+  } else {
+    notify_test();
+  }
+}
+
+void resume() {
+  queue_buf_idx = -1;
+  select_queue_testcase();
+}
+
+/* every 200 new queued items resume the symsan */
+bool should_resume(afl_state_t *afl) {
+  if (!use_symsan || !is_waiting) return false;
+  return afl->queued_items - record_queued_items >= 200;
+}
+
+static void delete_queue_entry()  {
+  queue_cur->disabled = true;
+  select_queue_testcase();
+}
+
+void handle_sym_request() {
+  struct SymSanProto *proto = (struct SymSanProto*) shm_symsan_ptr;
+  switch (proto->cmd) {
+  case START: 
+    select_queue_testcase();
+    break;
+  case DELETE:
+    delete_queue_entry();
+    break;
+  case TESTING: /* no purpose */
+    break;
+  default:
+    break;
+  }
+}
+
+
 static void at_exit() {
 
   s32   i, pid1 = 0, pid2 = 0, pgrp = -1;
@@ -113,6 +239,8 @@ static void at_exit() {
     kill(pid2, kill_signal);
 
   }
+
+  if (use_symsan) detroy_sanitizer_shm();
 
 }
 
@@ -556,11 +684,24 @@ int main(int argc, char **argv_orig, char **envp) {
   while (
       (opt = getopt(
            argc, argv,
-           "+Ab:B:c:CdDe:E:hi:I:f:F:g:G:l:L:m:M:nNOo:p:RQs:S:t:T:UV:WXx:YZ")) >
+           "+Aab:B:c:CdDe:E:hi:I:f:F:g:G:l:L:m:M:nNOo:p:RQs:S:t:T:UV:WXx:YZ")) >
       0) {
 
     switch (opt) {
 
+      case 'a': /* SymSan Mod */
+        use_symsan = 1;
+        kafl = afl;
+        int pid = getpid();
+        FILE* fp = fopen("/tmp/fuzzer_pid", "w");  // open the file for writing
+        if (fp == NULL) {
+          PFATAL("Write fuzzer pid failed");
+        }
+        fprintf(fp, "%d", pid);  // write the process id to the file
+        fclose(fp);
+        SAYF("[!] Fuzzer PID:%d\n", getpid());
+        setup_sanitizer_shm();
+        break;
       case 'g':
         afl->min_length = atoi(optarg);
         break;

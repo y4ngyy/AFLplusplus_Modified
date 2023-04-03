@@ -2920,6 +2920,7 @@ void check_if_tty(afl_state_t *afl) {
 /* Set up signal handlers. More complicated that needs to be, because libc on
    Solaris doesn't resume interrupted reads(), sets SA_RESETHAND when you call
    siginterrupt(), and does other stupid things. */
+extern void handle_sym_request();
 
 void setup_signal_handlers(void) {
 
@@ -2950,6 +2951,10 @@ void setup_signal_handlers(void) {
 
   sa.sa_handler = handle_skipreq;
   sigaction(SIGUSR1, &sa, NULL);
+
+  /* SIGUSR2: SymSan signal */
+  sa.sa_handler = handle_sym_request;
+  sigaction(SIGUSR2, &sa, NULL);
 
   /* Things we don't care about. */
 

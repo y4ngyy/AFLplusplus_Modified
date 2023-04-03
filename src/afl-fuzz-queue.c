@@ -533,6 +533,8 @@ static u8 check_if_text(afl_state_t *afl, struct queue_entry *q) {
 }
 
 /* Append new test case to the queue. */
+extern bool should_resume(afl_state_t *afl);
+extern void resume();
 
 void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
 
@@ -588,6 +590,10 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
 
     }
 
+  }
+
+  if (unlikely(should_resume(afl))) {
+    resume();
   }
 
   /* only redqueen currently uses is_ascii */
