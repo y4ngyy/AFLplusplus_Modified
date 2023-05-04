@@ -724,6 +724,16 @@ static void edit_params(u32 argc, char **argv, char **envp) {
       #endif
           cc_params[cc_par_cnt++] = alloc_printf(
               "-fpass-plugin=%s/SanitizerCoveragePCGUARD.so", obj_path);
+          // fix new pass manager argument issue https://github.com/llvm/llvm-project/issues/56137
+          if (getenv("AFL_TRACE_ADJCENT")) {
+            cc_params[cc_par_cnt++] = "-Xclang";
+            cc_params[cc_par_cnt++] = "-load";
+            cc_params[cc_par_cnt++] = "-Xclang";
+            cc_params[cc_par_cnt++] =
+                alloc_printf("%s/SanitizerCoveragePCGUARD.so", obj_path);
+            cc_params[cc_par_cnt++] = "-mllvm";
+            cc_params[cc_par_cnt++] = "-pcguard-trace-adjcent=true";
+          }
     #else
           cc_params[cc_par_cnt++] = "-Xclang";
           cc_params[cc_par_cnt++] = "-load";

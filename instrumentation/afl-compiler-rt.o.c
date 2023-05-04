@@ -1452,6 +1452,24 @@ __attribute__((constructor(0))) void __afl_auto_first(void) {
 
 }  // ptr memleak report is a false positive
 
+/* trace adjcent basickblock with pc guard */
+void __sanitizer_cov_trace_pc_guard_adjcent(size_t num, ...) {
+  if (num == 0) return;
+  printf("label adjcent blocks: %d", num);
+  va_list ap;
+  va_start(ap, num);
+  for (int i=0; i < num; i++) {
+    uint32_t *guard = va_arg(ap, uint32_t *);
+#if (LLVM_VERSION_MAJOR < 9)
+    __afl_area_ptr[*guard]++;
+#else
+    __afl_area_ptr[*guard] =
+      __afl_area_ptr[*guard] + 1 + (__afl_area_ptr[*guard] == 255 ? 1 : 0);
+#endif
+  }
+  va_end(ap);
+}
+
 /* The following stuff deals with supporting -fsanitize-coverage=trace-pc-guard.
    It remains non-operational in the traditional, plugin-backed LLVM mode.
    For more info about 'trace-pc-guard', see README.llvm.md.

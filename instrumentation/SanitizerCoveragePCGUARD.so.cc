@@ -76,6 +76,7 @@ const char SanCovModuleCtorBoolFlagName[] = "sancov.module_ctor_bool_flag";
 static const uint64_t SanCtorAndDtorPriority = 2;
 
 const char SanCovTracePCGuardName[] = "__sanitizer_cov_trace_pc_guard";
+const char SanCovTracePCGuardAdjcentName[] = "__sanitizer_cov_trace_pc_guard_adjcent";
 const char SanCovTracePCGuardInitName[] = "__sanitizer_cov_trace_pc_guard_init";
 const char SanCov8bitCountersInitName[] = "__sanitizer_cov_8bit_counters_init";
 const char SanCovBoolFlagInitName[] = "__sanitizer_cov_bool_flag_init";
@@ -159,7 +160,7 @@ class ModuleSanitizerCoverageAFL
   GlobalVariable *CreatePCArray(Function &F, ArrayRef<BasicBlock *> AllBlocks);
   void CreateFunctionLocalArrays(Function &F, ArrayRef<BasicBlock *> AllBlocks,
                                  uint32_t special);
-  void InjectCoverageAtBlock(Function &F, BasicBlock &BB, size_t Idx,
+  void InjectCoverageAtBlock(Function &F, BasicBlock &BB, size_t Idx, ArrayRef<BasicBlock *> AllBlocks,
                              bool IsLeafFunc = true);
   Function *CreateInitCallsForSections(Module &M, const char *CtorName,
                                        const char *InitFunctionName, Type *Ty,
@@ -178,7 +179,7 @@ class ModuleSanitizerCoverageAFL
   std::string     getSectionStart(const std::string &Section) const;
   std::string     getSectionEnd(const std::string &Section) const;
   FunctionCallee  SanCovTracePCIndir;
-  FunctionCallee  SanCovTracePC, SanCovTracePCGuard;
+  FunctionCallee  SanCovTracePC, SanCovTracePCGuard, SanCovTracePCGuardAdjcent;
   FunctionCallee  SanCovTraceCmpFunction[4];
   FunctionCallee  SanCovTraceConstCmpFunction[4];
   FunctionCallee  SanCovTraceDivFunction[2];
@@ -467,6 +468,7 @@ bool ModuleSanitizerCoverageAFL::instrumentModule(
   SanCovTracePC = M.getOrInsertFunction(SanCovTracePCName, VoidTy);
   SanCovTracePCGuard =
       M.getOrInsertFunction(SanCovTracePCGuardName, VoidTy, Int32PtrTy);
+  SanCovTracePCGuardAdjcent = M.getOrInsertFunction(SanCovTracePCGuardAdjcentName, FunctionType::get(VoidTy, IntptrTy, true));
 
   for (auto &F : M)
     instrumentFunction(F, DTCallback, PDTCallback);
@@ -1149,7 +1151,7 @@ bool ModuleSanitizerCoverageAFL::InjectCoverage(
 
   if (!AllBlocks.empty())
     for (size_t i = 0, N = AllBlocks.size(); i < N; i++)
-      InjectCoverageAtBlock(F, *AllBlocks[i], i, IsLeafFunc);
+      InjectCoverageAtBlock(F, *AllBlocks[i], i, AllBlocks, IsLeafFunc);
 
   return true;
 
@@ -1310,9 +1312,14 @@ void ModuleSanitizerCoverageAFL::InjectTraceForCmp(
 
 }
 
+#include "llvm/Support/CommandLine.h"
+static cl::opt<bool> ClTraceAdjcent("pcguard-trace-adjcent", cl::desc("trace adjcent block insdead of cur block"), cl::init(false));
+
+
 void ModuleSanitizerCoverageAFL::InjectCoverageAtBlock(Function   &F,
                                                        BasicBlock &BB,
                                                        size_t      Idx,
+                                                       ArrayRef<BasicBlock *> AllBlocks,
                                                        bool        IsLeafFunc) {
 
   BasicBlock::iterator IP = BB.getFirstInsertionPt();
@@ -1336,8 +1343,32 @@ void ModuleSanitizerCoverageAFL::InjectCoverageAtBlock(Function   &F,
 
   }
 
-  if (Options.TracePCGuard) {
-
+  if (Options.TracePCGuard && ClTraceAdjcent) {
+    /* Trace adjcent BB */
+    // llvm::errs() << "instrument Adjcent PCGuard\n";
+    SmallVector<Value *, 16> adjcentGuardPtrs;
+    int numSuccessor = 0;
+    for (auto *ABB: successors(&BB)) {
+      numSuccessor++;
+      auto iter = llvm::find(AllBlocks, ABB);
+      // ABB->print(llvm::errs());
+      if (iter != AllBlocks.end()) {
+        size_t index = std::distance(AllBlocks.begin(), iter);
+        Value *guardPtr = IRB.CreateIntToPtr(
+          IRB.CreateAdd(IRB.CreatePointerCast(FunctionGuardArray, IntptrTy),
+          ConstantInt::get(IntptrTy, index * 4)),Int32PtrTy);
+        adjcentGuardPtrs.push_back(guardPtr);
+      }
+    }
+    // llvm::errs() << "Actual Adjcent Blocks:" << numSuccessor << "\n";
+    if (!adjcentGuardPtrs.empty()) {
+      size_t numArg = adjcentGuardPtrs.size();
+      // llvm::errs() << "Adjcent Blocks:" << numArg << "\n";
+      adjcentGuardPtrs.insert(adjcentGuardPtrs.begin(), ConstantInt::get(IntptrTy, numArg));
+      IRB.CreateCall(SanCovTracePCGuardAdjcent, adjcentGuardPtrs);
+    }
+    instr++;
+  } else if (Options.TracePCGuard) {
     /* Get CurLoc */
 
     Value *GuardPtr = IRB.CreateIntToPtr(
