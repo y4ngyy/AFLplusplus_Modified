@@ -154,10 +154,8 @@ set output '$outputdir/low_freq.png'
 
 $GNUPLOT_SETUP
 
-plot '$inputdir/plot_data' using 1:8 with filledcurve x1 title '' linecolor rgb '#c00080' fillstyle transparent solid 0.2 noborder, \\
-     '' using 1:8 with lines title ' uniq crashes' linecolor rgb '#c00080' linewidth 3, \\
-     '' using 1:9 with lines title 'uniq hangs' linecolor rgb '#c000f0' linewidth 3, \\
-     '' using 1:10 with lines title 'levels' linecolor rgb '#0090ff' linewidth 3
+plot '$inputdir/plot_data' using 1:8 with lines title ' uniq crashes' linecolor rgb '#c00080' linewidth 3, \\
+     '$comparedir/plot_data' using 1:8 with lines title 'normal uniq crashes' linecolor rgb '#ff0080' linewidth 3
 "
 
 PLOT_ES="
