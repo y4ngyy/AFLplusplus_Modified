@@ -93,6 +93,10 @@ uint8_t afl_custom_queue_new_entry(my_mutator_t  *data,
     PFATAL("Couldn't find enqueued file: %s", fn);
   }
 
+  if (strstr(fn, "orig") == NULL && strstr(fn, "+cov") == NULL) {
+    return 0;
+  }
+
   int pid = fork();
 
   if (pid == -1) return 0;
