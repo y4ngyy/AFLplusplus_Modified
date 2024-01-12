@@ -71,7 +71,7 @@ my_mutator_t *afl_custom_init(afl_state_t *afl, unsigned int seed) {
   afl_struct = afl;
   for(int i=0; i<20; i++) data->conc_argv[i] = NULL;
   data->conc_argv[0] = "timeout";
-  data->conc_argv[1] = "5m";
+  data->conc_argv[1] = "3m";
   data->conc_argv[2] = data->target;
   if (mkdir(data->out_dir, 0755))
     PFATAL("Could not create directory %s", data->out_dir);
